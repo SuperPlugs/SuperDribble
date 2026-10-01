@@ -19,8 +19,9 @@ export class LuaPresetParser {
      */
     parsePresets(luaContent: string, presetType: 'equalizer' | 'spatializer'): any[] {
         try {
-            // 1. Remove comments
-            let cleanLua = luaContent.replace(/--.*$/gm, '').replace(/--\[\[[\s\S]*?\]\]/g, '');
+            // 1. Remove comments. Block comments must go first — the line-comment
+            // regex would otherwise truncate "--[[" and leak the block body as code.
+            let cleanLua = luaContent.replace(/--\[\[[\s\S]*?\]\]/g, '').replace(/--.*$/gm, '');
             
             // 2. Extract the target table content: "presets = { ... }"
             const tableName = presetType === 'equalizer' ? 'presets' : 'spatial_presets';
@@ -31,7 +32,7 @@ export class LuaPresetParser {
             const tableRegex = new RegExp(`${tableName}\\s*=\\s*\\{([\\s\\S]*)\\}`);
             const match = cleanLua.match(tableRegex);
             
-            if (!match || !match[1]) {
+            if (!match) {
                 console.error(`Could not find table '${tableName}' in Lua file`);
                 return [];
             }
@@ -111,51 +112,47 @@ export class LuaPresetParser {
         // Parse fields: key = value
         // value can be string "...", number, or table { ... }
         
-        // 1. Strings: key = "value"
-        const stringFields = [...body.matchAll(/(\w+)\s*=\s*"(.*?)"/g)];
-        stringFields.forEach(m => result[m[1]] = m[2]);
+        // 1. Strings: key = "value" (supports \" and \\ escapes)
+        const stringFields = [...body.matchAll(/(\w+)\s*=\s*"((?:[^"\\]|\\.)*)"/g)];
+        stringFields.forEach(m => result[m[1]] = m[2].replace(/\\(.)/g, '$1'));
         
-        // 2. Numbers: key = 123.45 (exclude inside quotes or braces if possible, but regex is greedy)
-        // Safer: specific keys we know.
-        // width = 1.4, etc.
-        const numberFields = [...body.matchAll(/(\w+)\s*=\s*(-?\d+\.?\d*)/g)];
+        // 2. Numbers: key = 123.45 — scanned on a copy with string literals
+        // blanked out, so values like description = "gain = 5" can't inject
+        // fake numeric fields or overwrite real ones.
+        const bodyWithoutStrings = body.replace(/"(?:[^"\\]|\\.)*"/g, '""');
+        const numberFields = [...bodyWithoutStrings.matchAll(/(\w+)\s*=\s*(-?\d+\.?\d*)/g)];
         numberFields.forEach(m => result[m[1]] = parseFloat(m[2]));
         
-        // 3. Arrays/Tables (bands, params)
-        
+        // 3. Arrays/Tables (bands, params, tags)
+
         // Bands: bands = { ... }
-        if (body.includes('bands = {')) {
-            const bandsMatch = body.match(/bands\s*=\s*\{([\s\S]*?)\n\s{8}\}/); // Indentation-based hack? No.
-            // Find balanced braces for bands
-            const bandsStart = body.indexOf('bands = {');
-            if (bandsStart !== -1) {
-                const inner = this.extractBalancedBrace(body, bandsStart + 8); // index of {
-                if (inner) {
-                    result.bands = this.parseBandsArray(inner);
-                }
+        const bandsOpen = body.match(/bands\s*=\s*\{/);
+        if (bandsOpen) {
+            const openBraceIndex = bandsOpen.index + bandsOpen[0].length - 1;
+            const inner = this.extractBalancedBrace(body, openBraceIndex);
+            if (inner) {
+                result.bands = this.parseBandsArray(inner);
             }
         }
 
         // Params: params = { ... }
-        if (body.includes('params = {')) {
-             const paramsStart = body.indexOf('params = {');
-             if (paramsStart !== -1) {
-                 const inner = this.extractBalancedBrace(body, paramsStart + 9);
-                 if (inner) {
-                     result.params = this.parseParamsObject(inner);
-                 }
-             }
+        const paramsOpen = body.match(/params\s*=\s*\{/);
+        if (paramsOpen) {
+            const openBraceIndex = paramsOpen.index + paramsOpen[0].length - 1;
+            const inner = this.extractBalancedBrace(body, openBraceIndex);
+            if (inner) {
+                result.params = this.parseParamsObject(inner);
+            }
         }
 
         // Tags: tags = { "a", "b" }
-        if (body.includes('tags = {')) {
-             const tagsStart = body.indexOf('tags = {');
-             if (tagsStart !== -1) {
-                 const inner = this.extractBalancedBrace(body, tagsStart + 7);
-                 if (inner) {
-                     result.tags = inner.match(/"(.*?)"/g)?.map(s => s.replace(/"/g, '')) || [];
-                 }
-             }
+        const tagsOpen = body.match(/tags\s*=\s*\{/);
+        if (tagsOpen) {
+            const openBraceIndex = tagsOpen.index + tagsOpen[0].length - 1;
+            const inner = this.extractBalancedBrace(body, openBraceIndex);
+            if (inner) {
+                result.tags = inner.match(/"(.*?)"/g)?.map(s => s.replace(/"/g, '')) || [];
+            }
         }
 
         return result;
