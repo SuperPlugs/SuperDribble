@@ -24,9 +24,10 @@ describe("LuaPresetParser", () => {
       fixturePath("wasm/spatializer/spatializer_presets.lua"),
       "utf8",
     );
+    expect(source).toMatch(/^--\[\[[\s\S]*?\]\]\r?\n/);
     const presets = new LuaPresetParser().parsePresets(source, "spatializer");
 
-    expect(presets.length).toBeGreaterThan(0);
+    expect(presets).toHaveLength(11);
     expect(presets[0]).toMatchObject({
       name: "Auditorium",
       params: { width: 1.4, decay: 0.7, damping: 0.4, mix: 0.35 },
